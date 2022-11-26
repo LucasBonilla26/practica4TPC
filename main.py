@@ -28,6 +28,8 @@ class Tutorial (object):
 
     self.ip_to_mac = {}
 
+    self.switch_ports = {'00:00:00:00:00:11':1,'00:00:00:00:00:22':2,'00:00:00:00:00:33':3}
+
   def resend_packet (self, packet_in, out_port):
     """
     Instructs the switch to resend a packet that it had sent to us.
@@ -120,22 +122,44 @@ class Tutorial (object):
 
     print(packet)
 
+    #Entry packet is ARP or IPv4
     if packet.type == packet.ARP_TYPE or packet.type == packet.IP_TYPE:
       
+      #Add to memory the port of the device specifies by the MAC of the last hots' packet
       sourceAddr = str(packet.src)
-      destinationAddr = str(packet.dst)
       inputPort = packet_in.in_port
       self.mac_to_port[sourceAddr] = inputPort
 
-      print(self.mac_to_port)
-      print(self.ip_to_mac)
-      
+      #ARP Packet
       if packet.type == packet.ARP_TYPE:
         
+        #Add to memory the IP of the device packet
         self.ip_to_mac[str(packet.payload.protosrc)]=str(packet.src)
-        
+      
+        print(self.ip_to_mac)
+        print(len(self.buffer))
+
+        if len(self.buffer) > 0 and str(self.buffer[0].payload.dstip) in self.ip_to_mac.keys():
+            
+            ether = pkt.ethernet()
+            ether.type = pkt.ethernet.IP_TYPE
+            ether.payload = self.buffer[0].payload
+            ether.src = packet.dst
+            ether.dst = pkt.EthAddr(self.ip_to_mac[str(self.buffer[0].payload.dstip)])
+
+            print(self.mac_to_port[self.ip_to_mac[str(self.buffer[0].payload.dstip)]])
+            self.resend_packet(ether, out_port=self.mac_to_port[str(self.ip_to_mac[str(self.buffer[0].payload.dstip)])])
+            self.buffer.pop()
+
+            msg = of.ofp_flow_mod()
+            msg.match.nw_dst = packet.payload.protosrc
+            msg.match.dl_type = 0x0806
+            msg.actions.append(of.ofp_action_output(port = self.mac_to_port[str(self.ip_to_mac[str(packet.payload.protosrc)])]))
+            self.connection.send(msg)
+
+        #ARP Request to a switch interface 
         if str(packet.payload.protodst) in self.switch_interfaces.keys() and packet.payload.opcode == pkt.arp.REQUEST:
-          #ARP REQUEST A INTERFAZ DEL SWITCH DEVUELVE ARP REPLY
+          #ARP Reply is created and send to the ARE Request host
           arp_reply = pkt.arp()
           arp_reply.hwsrc = pkt.EthAddr(self.switch_interfaces[str(packet.payload.protodst)][0]) #funciona
           arp_reply.hwdst = packet.src
@@ -151,16 +175,15 @@ class Tutorial (object):
 
           self.resend_packet(ether, out_port=self.switch_interfaces[str(packet.payload.protodst)][1])
       
+      #IP Packet
       elif packet.type == packet.IP_TYPE:
-        #CONOZCO LA MAC DE DESTINO DEL PAQUETE IP
+        
+        #Add to memory the IP address related to the MAC 
         self.ip_to_mac[str(packet.payload.srcip)]=str(packet.src)
 
-        #PING TO A SWITCH INTERFACE
+        #IP packet to a switch interface
         if str(packet.payload.dstip) in self.switch_interfaces.keys():
-          print("LLEGA IP AL SWITCH")
-          seq = packet.payload.payload.payload.seq #ip-icmp-echo.seq
-          id = packet.payload.payload.payload.id
-
+          #IP packet with ICMP reply resend the to the host
           icmp = pkt.icmp()
           icmp.type = pkt.TYPE_ECHO_REPLY #ECHO REPLY
           icmp.code = pkt.TYPE_ECHO_REPLY
@@ -170,7 +193,6 @@ class Tutorial (object):
           ip.protocol = packet.payload.protocol
           ip.srcip = packet.payload.dstip
           ip.dstip = packet.payload.srcip
-          #ip.id = packet.payload.id
           ip.payload = icmp
 
           ether = pkt.ethernet()
@@ -179,15 +201,13 @@ class Tutorial (object):
           ether.src = packet.dst
           ether.dst = packet.src
 
-          print(ether.src)
-          print(ether.dst)
-          print(ip.srcip)
-          print(ip.dstip)
-
           print(self.switch_interfaces[str(packet.payload.dstip)][1])
           self.resend_packet(ether, out_port=self.switch_interfaces[str(packet.payload.dstip)][1])
 
+        #IP packet send to a known host 
         elif str(packet.payload.dstip) in self.ip_to_mac.keys() and self.ip_to_mac[str(packet.payload.dstip)] in self.mac_to_port:
+          
+          #Resend to destionation host changing MACs
           ether = pkt.ethernet()
           ether.type = pkt.ethernet.IP_TYPE
           ether.payload = packet.payload
@@ -195,22 +215,47 @@ class Tutorial (object):
           ether.dst = pkt.EthAddr(self.ip_to_mac[str(packet.payload.dstip)])
           print(ether)
           self.resend_packet(ether, out_port=self.mac_to_port[self.ip_to_mac[str(packet.payload.dstip)]])
-        
+
+          msg = of.ofp_flow_mod()
+          msg.match.dl_src = packet.dst
+          msg.match.dl_dst = pkt.EthAddr(self.ip_to_mac[str(packet.payload.dstip)])
+          msg.match.nw_dst = packet.payload.dstip
+          msg.match.dl_type = 0x0800
+          
+          port = None 
+          port = self.mac_to_port[str(pkt.EthAddr(self.ip_to_mac[str(packet.payload.dstip)]))]
+          msg.actions.append(of.ofp_action_output(port = port))
+          self.connection.send(msg)
+
+          # msg = of.ofp_flow_mod()
+          # msg.match.dl_src = pkt.EthAddr(self.ip_to_mac[str(packet.payload.dstip)])
+          # msg.match.dl_dst = packet.dst
+          # msg.match.nw_dst = packet.payload.srcip
+          # msg.match.dl_type = 0x0800
+
+          # port = None 
+          # port = self.mac_to_port[str(pkt.EthAddr(self.ip_to_mac[packet.dst]))]
+          # msg.actions.append(of.ofp_action_output(port = port))
+          # self.connection.send(msg)
+
         else:
-          #NO CONOZCO LA MAC, SWITCH MANDA ARP REQUEST BROADCAST
+          #IP packet send to an unknown host known
+          print("Broadcast and store IP packet")
+          self.buffer.append(packet)
+          print(self.buffer[-1])
+
           arp_request = pkt.arp()
           arp_request.hwsrc = packet.dst
           arp_request.hwdst = pkt.EthAddr.BROADCAST
           arp_request.opcode = pkt.arp.REQUEST
           arp_request.protosrc = packet.payload.srcip
           arp_request.protodst = packet.payload.dstip
-          print(arp_request)
           ether = pkt.ethernet()
           ether.type = pkt.ethernet.ARP_TYPE
           ether.dst = pkt.EthAddr.BROADCAST
           ether.src = packet.dst
           ether.payload = arp_request
-          print(ether)
+      
           self.resend_packet(ether, of.OFPP_ALL)
 
 
