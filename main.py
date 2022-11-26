@@ -26,9 +26,7 @@ class Tutorial (object):
                          '10.0.2.1':['00:00:00:00:00:22',2],
                          '10.0.3.1':['00:00:00:00:00:33',3]}
 
-    self.ip_to_mac = {'10.0.1.100':'00:00:00:00:00:01',
-                      '10.0.2.100':'00:00:00:00:00:02',
-                      '10.0.3.100':'00:00:00:00:00:03'}
+    self.ip_to_mac = {}
 
   def resend_packet (self, packet_in, out_port):
     """
@@ -122,50 +120,98 @@ class Tutorial (object):
 
     print(packet)
 
-    sourceAddr = str(packet.src)
-    destinationAddr = str(packet.dst)
-    inputPort = packet_in.in_port
-    self.mac_to_port[sourceAddr] = inputPort
+    if packet.type == packet.ARP_TYPE or packet.type == packet.IP_TYPE:
+      
+      sourceAddr = str(packet.src)
+      destinationAddr = str(packet.dst)
+      inputPort = packet_in.in_port
+      self.mac_to_port[sourceAddr] = inputPort
 
-    print(self.mac_to_port)
+      print(self.mac_to_port)
+      print(self.ip_to_mac)
+      
+      if packet.type == packet.ARP_TYPE:
+        
+        self.ip_to_mac[str(packet.payload.protosrc)]=str(packet.src)
+        
+        if str(packet.payload.protodst) in self.switch_interfaces.keys() and packet.payload.opcode == pkt.arp.REQUEST:
+          #ARP REQUEST A INTERFAZ DEL SWITCH DEVUELVE ARP REPLY
+          arp_reply = pkt.arp()
+          arp_reply.hwsrc = pkt.EthAddr(self.switch_interfaces[str(packet.payload.protodst)][0]) #funciona
+          arp_reply.hwdst = packet.src
+          arp_reply.opcode = pkt.arp.REPLY
+          arp_reply.protosrc = packet.payload.protodst
+          arp_reply.protodst = packet.payload.protosrc
 
-    if packet.type == packet.ARP_TYPE and str(packet.payload.protodst) in self.switch_interfaces.keys():
-      if packet.payload.opcode == pkt.arp.REQUEST:
-        print("ARP INTERFAZ")
-        arp_reply = pkt.arp()
-        arp_reply.hwsrc = pkt.EthAddr(self.switch_interfaces[str(packet.payload.protodst)][0]) #funciona
-        arp_reply.hwdst = packet.src
-        print(arp_reply.hwsrc)
-        print(arp_reply.hwdst)
-        arp_reply.opcode = pkt.arp.REPLY
-        arp_reply.protosrc = packet.payload.protodst
-        arp_reply.protodst = packet.payload.protosrc
-        print(arp_reply.protosrc)
-        print(arp_reply.protodst)
-        ether = pkt.ethernet()
-        ether.type = pkt.ethernet.ARP_TYPE
-        ether.dst = packet.src
-        ether.src = pkt.EthAddr(self.switch_interfaces[str(packet.payload.protodst)][0]) #funciona
-        print(ether.src)
-        print(ether.dst)
-        ether.payload = arp_reply
-        # switch_packet = of.ofp_packet_out()
-        # switch_packet.data = ether
-        print(arp_reply)
-        self.resend_packet(ether, out_port=self.switch_interfaces[str(packet.payload.protodst)][1])
-    
-    elif packet.type == packet.IP_TYPE:
-      print("SOY IP")
-      print(packet.payload.dstip)
-      print(self.ip_to_mac[str(packet.payload.dstip)])
-      if self.ip_to_mac[str(packet.payload.dstip)] in self.mac_to_port:
-        ether = pkt.ethernet()
-        ether.type = pkt.ethernet.IP_TYPE
-        ether.payload = packet.payload
-        ether.src = packet.dst
-        ether.dst = pkt.EthAddr(self.ip_to_mac[str(packet.payload.dstip)])
-        print(ether)
-        self.resend_packet(ether, out_port=self.mac_to_port[self.ip_to_mac[str(packet.payload.dstip)]])
+          ether = pkt.ethernet()
+          ether.type = pkt.ethernet.ARP_TYPE
+          ether.dst = packet.src
+          ether.src = pkt.EthAddr(self.switch_interfaces[str(packet.payload.protodst)][0]) #funciona
+          ether.payload = arp_reply
+
+          self.resend_packet(ether, out_port=self.switch_interfaces[str(packet.payload.protodst)][1])
+      
+      elif packet.type == packet.IP_TYPE:
+        #CONOZCO LA MAC DE DESTINO DEL PAQUETE IP
+        self.ip_to_mac[str(packet.payload.srcip)]=str(packet.src)
+
+        #PING TO A SWITCH INTERFACE
+        if str(packet.payload.dstip) in self.switch_interfaces.keys():
+          print("LLEGA IP AL SWITCH")
+          seq = packet.payload.payload.payload.seq #ip-icmp-echo.seq
+          id = packet.payload.payload.payload.id
+
+          icmp = pkt.icmp()
+          icmp.type = pkt.TYPE_ECHO_REPLY #ECHO REPLY
+          icmp.code = pkt.TYPE_ECHO_REPLY
+          icmp.payload = packet.payload.payload.payload
+
+          ip = pkt.ipv4()
+          ip.protocol = packet.payload.protocol
+          ip.srcip = packet.payload.dstip
+          ip.dstip = packet.payload.srcip
+          #ip.id = packet.payload.id
+          ip.payload = icmp
+
+          ether = pkt.ethernet()
+          ether.type = pkt.ethernet.IP_TYPE
+          ether.payload = ip
+          ether.src = packet.dst
+          ether.dst = packet.src
+
+          print(ether.src)
+          print(ether.dst)
+          print(ip.srcip)
+          print(ip.dstip)
+
+          print(self.switch_interfaces[str(packet.payload.dstip)][1])
+          self.resend_packet(ether, out_port=self.switch_interfaces[str(packet.payload.dstip)][1])
+
+        elif str(packet.payload.dstip) in self.ip_to_mac.keys() and self.ip_to_mac[str(packet.payload.dstip)] in self.mac_to_port:
+          ether = pkt.ethernet()
+          ether.type = pkt.ethernet.IP_TYPE
+          ether.payload = packet.payload
+          ether.src = packet.dst
+          ether.dst = pkt.EthAddr(self.ip_to_mac[str(packet.payload.dstip)])
+          print(ether)
+          self.resend_packet(ether, out_port=self.mac_to_port[self.ip_to_mac[str(packet.payload.dstip)]])
+        
+        else:
+          #NO CONOZCO LA MAC, SWITCH MANDA ARP REQUEST BROADCAST
+          arp_request = pkt.arp()
+          arp_request.hwsrc = packet.dst
+          arp_request.hwdst = pkt.EthAddr.BROADCAST
+          arp_request.opcode = pkt.arp.REQUEST
+          arp_request.protosrc = packet.payload.srcip
+          arp_request.protodst = packet.payload.dstip
+          print(arp_request)
+          ether = pkt.ethernet()
+          ether.type = pkt.ethernet.ARP_TYPE
+          ether.dst = pkt.EthAddr.BROADCAST
+          ether.src = packet.dst
+          ether.payload = arp_request
+          print(ether)
+          self.resend_packet(ether, of.OFPP_ALL)
 
 
 def launch ():
