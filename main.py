@@ -216,27 +216,34 @@ class Tutorial (object):
           print(ether)
           self.resend_packet(ether, out_port=self.mac_to_port[self.ip_to_mac[str(packet.payload.dstip)]])
 
+          print(packet.src)
+          print(packet.dst)
           msg = of.ofp_flow_mod()
-          msg.match.dl_src = packet.dst
-          msg.match.dl_dst = pkt.EthAddr(self.ip_to_mac[str(packet.payload.dstip)])
+          msg.match.dl_src = packet.src
+          msg.match.dl_dst = packet.dst
           msg.match.nw_dst = packet.payload.dstip
           msg.match.dl_type = 0x0800
           
           port = None 
           port = self.mac_to_port[str(pkt.EthAddr(self.ip_to_mac[str(packet.payload.dstip)]))]
+          msg.actions.append(of.ofp_action_dl_addr.set_src(packet.dst))
+          msg.actions.append(of.ofp_action_dl_addr.set_dst(self.ip_to_mac[str(packet.payload.dstip)]))
           msg.actions.append(of.ofp_action_output(port = port))
+          msg._validate()
+          print(msg)
           self.connection.send(msg)
 
           # msg = of.ofp_flow_mod()
-          # msg.match.dl_src = pkt.EthAddr(self.ip_to_mac[str(packet.payload.dstip)])
-          # msg.match.dl_dst = packet.dst
-          # msg.match.nw_dst = packet.payload.srcip
+          # msg.match.dl_dst = pkt.EthAddr(self.ip_to_mac[str(packet.payload.dstip)])
           # msg.match.dl_type = 0x0800
-
+          
           # port = None 
-          # port = self.mac_to_port[str(pkt.EthAddr(self.ip_to_mac[packet.dst]))]
+          # port = self.mac_to_port[str(pkt.EthAddr(self.ip_to_mac[str(packet.payload.dstip)]))]
           # msg.actions.append(of.ofp_action_output(port = port))
-          # self.connection.send(msg)
+          # msg.actions.append(of.ofp_action_output(dl_dst=pkt.EthAddr(self.ip_to_mac[str(packet.payload.dstip)])))
+          # msg._validate()
+
+          self.connection.send(msg)
 
         else:
           #IP packet send to an unknown host known
